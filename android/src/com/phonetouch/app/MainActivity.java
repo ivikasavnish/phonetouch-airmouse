@@ -651,12 +651,16 @@ public class MainActivity extends Activity implements SensorEventListener {
         if (!powerEnabled || faceDownStandby) return;
         InetAddress target = activeHostAddr;
         DatagramSocket ds = udpMotionSocket;
-        if (target == null || ds == null) {
-            // Fallback to TCP if UDP socket/address not ready
+        // Fallback to TCP if UDP socket/address not ready, or over USB: `adb reverse` only
+        // tunnels TCP, so UDP to 127.0.0.1 would land on the phone itself
+        if (target == null || ds == null || target.isLoopbackAddress()) {
             if (opcode == 1) {
                 sendCmd(String.format(Locale.US, "{\"t\":\"rel\",\"dx\":%.3f,\"dy\":%.3f}", v1, v2));
             } else if (opcode == 2) {
                 sendCmd(String.format(Locale.US, "{\"t\":\"scroll\",\"dy\":%.3f,\"dx\":%.3f}", v1, v2));
+            } else if (opcode == 3) {
+                sendCmd(String.format(Locale.US, "{\"t\":\"mt\",\"s\":%d,\"x\":%.5f,\"y\":%.5f,\"d\":%b}",
+                        slotOrFlags & 0x0F, v1, v2, (slotOrFlags & 0x80) != 0));
             }
             return;
         }
