@@ -32,17 +32,67 @@ const EV_ABS: u16 = 0x03;
 const SYN_REPORT: u16 = 0x00;
 
 const KEY_ESC: u16 = 1;
+const KEY_1: u16 = 2;
+const KEY_2: u16 = 3;
+const KEY_3: u16 = 4;
+const KEY_4: u16 = 5;
+const KEY_5: u16 = 6;
+const KEY_6: u16 = 7;
+const KEY_7: u16 = 8;
+const KEY_8: u16 = 9;
+const KEY_9: u16 = 10;
 const KEY_0: u16 = 11;
 const KEY_MINUS: u16 = 12;
 const KEY_EQUAL: u16 = 13;
 const KEY_BACKSPACE: u16 = 14;
 const KEY_TAB: u16 = 15;
+const KEY_Q: u16 = 16;
+const KEY_W: u16 = 17;
+const KEY_E: u16 = 18;
+const KEY_R: u16 = 19;
+const KEY_T: u16 = 20;
+const KEY_Y: u16 = 21;
+const KEY_U: u16 = 22;
+const KEY_I: u16 = 23;
+const KEY_O: u16 = 24;
+const KEY_P: u16 = 25;
+const KEY_LEFTBRACE: u16 = 26;
+const KEY_RIGHTBRACE: u16 = 27;
 const KEY_ENTER: u16 = 28;
 const KEY_LEFTCTRL: u16 = 29;
+const KEY_A: u16 = 30;
+const KEY_S: u16 = 31;
+const KEY_D: u16 = 32;
+const KEY_F: u16 = 33;
+const KEY_G: u16 = 34;
+const KEY_H: u16 = 35;
+const KEY_J: u16 = 36;
+const KEY_K: u16 = 37;
+const KEY_L: u16 = 38;
+const KEY_SEMICOLON: u16 = 39;
+const KEY_APOSTROPHE: u16 = 40;
+const KEY_GRAVE: u16 = 41;
 const KEY_LEFTSHIFT: u16 = 42;
+const KEY_BACKSLASH: u16 = 43;
+const KEY_Z: u16 = 44;
+const KEY_X: u16 = 45;
+const KEY_C: u16 = 46;
+const KEY_V: u16 = 47;
+const KEY_B: u16 = 48;
+const KEY_N: u16 = 49;
+const KEY_M: u16 = 50;
+const KEY_COMMA: u16 = 51;
+const KEY_DOT: u16 = 52;
+const KEY_SLASH: u16 = 53;
 const KEY_LEFTALT: u16 = 56;
 const KEY_SPACE: u16 = 57;
+const KEY_MUTE: u16 = 113;
+const KEY_VOLUMEDOWN: u16 = 114;
+const KEY_VOLUMEUP: u16 = 115;
 const KEY_LEFTMETA: u16 = 125;
+const KEY_NEXTSONG: u16 = 163;
+const KEY_PLAYPAUSE: u16 = 164;
+const KEY_PREVIOUSSONG: u16 = 165;
 
 const BTN_LEFT: u16 = 0x110;
 const BTN_RIGHT: u16 = 0x111;
@@ -122,6 +172,7 @@ struct VirtualInput {
     rem_vscroll: f64,
     rem_hscroll: f64,
     active_slots: [bool; 5],
+    monitor_region: usize, // 0 = Full Desktop, 1 = Left Half, 2 = Right Half
 }
 
 impl VirtualInput {
@@ -136,6 +187,7 @@ impl VirtualInput {
             rem_vscroll: 0.0,
             rem_hscroll: 0.0,
             active_slots: [false; 5],
+            monitor_region: 0,
         })
     }
 
@@ -156,22 +208,20 @@ impl VirtualInput {
             ioctl(fd, UI_SET_EVBIT, EV_REL as i32);
             ioctl(fd, UI_SET_EVBIT, EV_SYN as i32);
 
+            for keycode in 1..=57 {
+                ioctl(fd, UI_SET_KEYBIT, keycode as i32);
+            }
             for btn in [
                 BTN_LEFT,
                 BTN_RIGHT,
                 BTN_MIDDLE,
-                KEY_ESC,
-                KEY_0,
-                KEY_MINUS,
-                KEY_EQUAL,
-                KEY_BACKSPACE,
-                KEY_TAB,
-                KEY_ENTER,
-                KEY_LEFTCTRL,
-                KEY_LEFTSHIFT,
-                KEY_LEFTALT,
-                KEY_SPACE,
+                KEY_MUTE,
+                KEY_VOLUMEDOWN,
+                KEY_VOLUMEUP,
                 KEY_LEFTMETA,
+                KEY_NEXTSONG,
+                KEY_PLAYPAUSE,
+                KEY_PREVIOUSSONG,
             ] {
                 ioctl(fd, UI_SET_KEYBIT, btn as i32);
             }
@@ -443,7 +493,94 @@ impl VirtualInput {
                 Self::emit(&mut self.mouse_file, EV_KEY, KEY_LEFTCTRL, 0);
                 Self::emit(&mut self.mouse_file, EV_SYN, SYN_REPORT, 0);
             }
+            "vol_up" => self.tap_key(KEY_VOLUMEUP, false),
+            "vol_down" => self.tap_key(KEY_VOLUMEDOWN, false),
+            "vol_mute" => self.tap_key(KEY_MUTE, false),
+            "media_play" => self.tap_key(KEY_PLAYPAUSE, false),
+            "media_next" => self.tap_key(KEY_NEXTSONG, false),
+            "media_prev" => self.tap_key(KEY_PREVIOUSSONG, false),
+            "laser_ring" => {
+                // GNOME / Pop!_OS 'Locate Pointer' visual cursor highlight (taps Left Ctrl)
+                self.tap_key(KEY_LEFTCTRL, false);
+            }
+            "mon_cycle" => {
+                self.monitor_region = (self.monitor_region + 1) % 3;
+                println!("[*] 1:1 Touchscreen Monitor Region set to {}", self.monitor_region);
+            }
             _ => {}
+        }
+    }
+
+    fn tap_key(&mut self, code: u16, shift: bool) {
+        if shift {
+            Self::emit(&mut self.mouse_file, EV_KEY, KEY_LEFTSHIFT, 1);
+        }
+        Self::emit(&mut self.mouse_file, EV_KEY, code, 1);
+        Self::emit(&mut self.mouse_file, EV_SYN, SYN_REPORT, 0);
+        thread::sleep(Duration::from_millis(8));
+        Self::emit(&mut self.mouse_file, EV_KEY, code, 0);
+        if shift {
+            Self::emit(&mut self.mouse_file, EV_KEY, KEY_LEFTSHIFT, 0);
+        }
+        Self::emit(&mut self.mouse_file, EV_SYN, SYN_REPORT, 0);
+        thread::sleep(Duration::from_millis(4));
+    }
+
+    fn type_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            let mapped: Option<(u16, bool)> = match ch {
+                'a'..='z' => {
+                    let c = match ch {
+                        'a' => KEY_A, 'b' => KEY_B, 'c' => KEY_C, 'd' => KEY_D, 'e' => KEY_E,
+                        'f' => KEY_F, 'g' => KEY_G, 'h' => KEY_H, 'i' => KEY_I, 'j' => KEY_J,
+                        'k' => KEY_K, 'l' => KEY_L, 'm' => KEY_M, 'n' => KEY_N, 'o' => KEY_O,
+                        'p' => KEY_P, 'q' => KEY_Q, 'r' => KEY_R, 's' => KEY_S, 't' => KEY_T,
+                        'u' => KEY_U, 'v' => KEY_V, 'w' => KEY_W, 'x' => KEY_X, 'y' => KEY_Y,
+                        'z' => KEY_Z, _ => KEY_SPACE,
+                    };
+                    Some((c, false))
+                }
+                'A'..='Z' => {
+                    let lower = ch.to_ascii_lowercase();
+                    let c = match lower {
+                        'a' => KEY_A, 'b' => KEY_B, 'c' => KEY_C, 'd' => KEY_D, 'e' => KEY_E,
+                        'f' => KEY_F, 'g' => KEY_G, 'h' => KEY_H, 'i' => KEY_I, 'j' => KEY_J,
+                        'k' => KEY_K, 'l' => KEY_L, 'm' => KEY_M, 'n' => KEY_N, 'o' => KEY_O,
+                        'p' => KEY_P, 'q' => KEY_Q, 'r' => KEY_R, 's' => KEY_S, 't' => KEY_T,
+                        'u' => KEY_U, 'v' => KEY_V, 'w' => KEY_W, 'x' => KEY_X, 'y' => KEY_Y,
+                        'z' => KEY_Z, _ => KEY_SPACE,
+                    };
+                    Some((c, true))
+                }
+                '1' => Some((KEY_1, false)), '!' => Some((KEY_1, true)),
+                '2' => Some((KEY_2, false)), '@' => Some((KEY_2, true)),
+                '3' => Some((KEY_3, false)), '#' => Some((KEY_3, true)),
+                '4' => Some((KEY_4, false)), '$' => Some((KEY_4, true)),
+                '5' => Some((KEY_5, false)), '%' => Some((KEY_5, true)),
+                '6' => Some((KEY_6, false)), '^' => Some((KEY_6, true)),
+                '7' => Some((KEY_7, false)), '&' => Some((KEY_7, true)),
+                '8' => Some((KEY_8, false)), '*' => Some((KEY_8, true)),
+                '9' => Some((KEY_9, false)), '(' => Some((KEY_9, true)),
+                '0' => Some((KEY_0, false)), ')' => Some((KEY_0, true)),
+                '-' => Some((KEY_MINUS, false)), '_' => Some((KEY_MINUS, true)),
+                '=' => Some((KEY_EQUAL, false)), '+' => Some((KEY_EQUAL, true)),
+                '[' => Some((KEY_LEFTBRACE, false)), '{' => Some((KEY_LEFTBRACE, true)),
+                ']' => Some((KEY_RIGHTBRACE, false)), '}' => Some((KEY_RIGHTBRACE, true)),
+                '\\' => Some((KEY_BACKSLASH, false)), '|' => Some((KEY_BACKSLASH, true)),
+                ';' => Some((KEY_SEMICOLON, false)), ':' => Some((KEY_SEMICOLON, true)),
+                '\'' => Some((KEY_APOSTROPHE, false)), '"' => Some((KEY_APOSTROPHE, true)),
+                '`' => Some((KEY_GRAVE, false)), '~' => Some((KEY_GRAVE, true)),
+                ',' => Some((KEY_COMMA, false)), '<' => Some((KEY_COMMA, true)),
+                '.' => Some((KEY_DOT, false)), '>' => Some((KEY_DOT, true)),
+                '/' => Some((KEY_SLASH, false)), '?' => Some((KEY_SLASH, true)),
+                ' ' => Some((KEY_SPACE, false)),
+                '\n' => Some((KEY_ENTER, false)),
+                '\t' => Some((KEY_TAB, false)),
+                _ => None,
+            };
+            if let Some((code, shift)) = mapped {
+                self.tap_key(code, shift);
+            }
         }
     }
 
@@ -475,7 +612,12 @@ impl VirtualInput {
         if slot >= 5 {
             return;
         }
-        let x = ((norm_x * ABS_MAX_X as f64) as i32).clamp(0, ABS_MAX_X);
+        let adj_x = match self.monitor_region {
+            1 => norm_x * 0.5,         // Primary / Left Display
+            2 => 0.5 + norm_x * 0.5,   // Secondary / Right Display
+            _ => norm_x,               // Full Combined Desktop
+        };
+        let x = ((adj_x * ABS_MAX_X as f64) as i32).clamp(0, ABS_MAX_X);
         let y = ((norm_y * ABS_MAX_Y as f64) as i32).clamp(0, ABS_MAX_Y);
 
         Self::emit(&mut self.touch_file, EV_ABS, ABS_MT_SLOT, slot as i32);
@@ -597,6 +739,10 @@ fn process_line(vinput: &Arc<Mutex<VirtualInput>>, line: &str) {
         "shortcut" => {
             let a = extract_str(line, "a").unwrap_or("");
             dev.shortcut(a);
+        }
+        "text" => {
+            let s = extract_str(line, "s").unwrap_or("");
+            dev.type_text(s);
         }
         _ => {}
     }
@@ -889,13 +1035,68 @@ fn spawn_http_control_server(state: Arc<DaemonState>) {
     });
 }
 
-fn spawn_udp_discovery_responder() {
+fn spawn_udp_discovery_responder(
+    vinput: Arc<Mutex<VirtualInput>>,
+    state: Arc<DaemonState>,
+) {
     thread::spawn(move || {
         let Ok(sock) = UdpSocket::bind(format!("0.0.0.0:{UDP_DISCOVERY_PORT}")) else {
             return;
         };
-        let mut buf = [0u8; 128];
+        let mut buf = [0u8; 256];
         while let Ok((len, src)) = sock.recv_from(&mut buf) {
+            // Fast 16-byte Authenticated Binary UDP Packet for Motion & Scroll:
+            // [0..2]: Magic 0x50, 0x54 ("PT")
+            // [2]:    Opcode: 1 = rel (dx, dy), 2 = scroll (dy, dx), 3 = mt (slot, x, y, down)
+            // [3]:    Slot / Flags
+            // [4..8]: Token FNV-1a 32-bit signature XOR-masked with payload
+            // [8..12]: f32 val1 (little-endian)
+            // [12..16]: f32 val2 (little-endian)
+            if len == 16 && buf[0] == 0x50 && buf[1] == 0x54 {
+                if !state.enabled.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let tok = state.token.lock().map(|g| g.clone()).unwrap_or_default();
+                let mut hash: u32 = 0x811c9dc5;
+                for b in tok.as_bytes() {
+                    hash ^= *b as u32;
+                    hash = hash.wrapping_mul(0x01000193);
+                }
+                let pkt_sig = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+                if pkt_sig != hash {
+                    continue;
+                }
+                let mask = hash.to_le_bytes();
+                let b1 = [
+                    buf[8] ^ mask[0],
+                    buf[9] ^ mask[1],
+                    buf[10] ^ mask[2],
+                    buf[11] ^ mask[3],
+                ];
+                let b2 = [
+                    buf[12] ^ mask[0],
+                    buf[13] ^ mask[1],
+                    buf[14] ^ mask[2],
+                    buf[15] ^ mask[3],
+                ];
+                let v1 = f32::from_le_bytes(b1) as f64;
+                let v2 = f32::from_le_bytes(b2) as f64;
+
+                if let Ok(mut dev) = vinput.lock() {
+                    match buf[2] {
+                        1 => dev.move_rel(v1, v2),
+                        2 => dev.scroll(v1, v2),
+                        3 => {
+                            let slot = (buf[3] & 0x0F) as usize;
+                            let down = (buf[3] & 0x80) != 0;
+                            dev.touch_mt(slot, v1, v2, down);
+                        }
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+
             if let Ok(msg) = std::str::from_utf8(&buf[..len]) {
                 if msg.trim() == "PHONETOUCH_DISCOVER" {
                     let _ = sock.send_to(b"PHONETOUCH_HERE:9999", src);
@@ -996,7 +1197,7 @@ fn main() {
     println!("{}", generate_qr_utf8(&uri));
 
     spawn_http_control_server(Arc::clone(&state));
-    spawn_udp_discovery_responder();
+    spawn_udp_discovery_responder(Arc::clone(&vinput), Arc::clone(&state));
     spawn_adb_watchdog();
 
     let addr = format!("0.0.0.0:{TCP_PORT}");

@@ -64,8 +64,13 @@ APK_OUT="$PROJECT_DIR/PhoneTouch.apk"
 
 echo "[+] Built signed native APK: $APK_OUT"
 
-"$ADB" reverse tcp:9999 tcp:9999
-"$ADB" install -r "$APK_OUT"
-"$ADB" shell am start -n com.phonetouch.app/.MainActivity
-
-echo "[+] PhoneTouch AirMouse installed and launched on your Android phone!"
+if "$ADB" get-state >/dev/null 2>&1; then
+  "$ADB" reverse tcp:9999 tcp:9999
+  "$ADB" install -r "$APK_OUT"
+  "$ADB" shell am start -n com.phonetouch.app/.MainActivity
+  echo "[+] PhoneTouch AirMouse installed and launched on your Android phone!"
+else
+  echo "[*] Note: No Android phone currently connected over ADB/USB."
+  echo "    Connect your phone via USB (or wireless ADB) and run:"
+  echo "    $ADB install -r $APK_OUT"
+fi

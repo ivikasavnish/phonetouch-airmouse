@@ -21,10 +21,12 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
@@ -36,6 +38,8 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -51,16 +55,24 @@ public class MainActivity extends Activity implements SensorEventListener {
     private volatile boolean touchClutch = false;
     private volatile float sensitivity = 14.0f;
 
-    // Power / Disconnect switch, QR Auth Token & OLED Stealth Mode
+    // Power / Disconnect switch, QR Auth Token, Face-Down Standby & OLED Stealth Mode
     private volatile boolean powerEnabled = true;
     private volatile boolean stealthMode = false;
+    private volatile boolean faceDownStandby = false;
     private volatile Socket activeSocket = null;
+    private volatile DatagramSocket udpMotionSocket = null;
+    private volatile InetAddress activeHostAddr = null;
     private volatile String discoveredWifiHost = null;
     private volatile String authToken = "c09ca300459f9302";
+    private volatile int tokenHash32 = 0;
 
     private SensorManager sensorManager;
     private Sensor gyroSensor;
     private Sensor accelSensor;
+    private Sensor gravitySensor;
+    private Sensor proximitySensor;
+    private volatile boolean isNearProximity = false;
+    private volatile boolean isFaceDown = false;
 
     private final float[] latestAccel = new float[]{0f, 0f, 0f};
     private float smoothVx = 0f;
@@ -74,10 +86,12 @@ public class MainActivity extends Activity implements SensorEventListener {
     private LinearLayout headerLayout;
     private LinearLayout tabsRowLayout;
     private LinearLayout sensRowLayout;
+    private LinearLayout mediaRowLayout;
     private LinearLayout keyRowLayout;
     private LinearLayout btnRowLayout;
     private TextView statusText;
     private TextView sensorReadout;
+    private TextView kbdBtn;
     private TextView pairBtn;
     private TextView stealthBtn;
     private TextView powerBtn;
@@ -85,6 +99,24 @@ public class MainActivity extends Activity implements SensorEventListener {
     private TextView[] tabButtons = new TextView[3];
     private TouchPadView touchPadView;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
+
+    private void updateTokenHash() {
+        long hash = 0x811c9dc5L;
+        byte[] bytes = authToken.getBytes(StandardCharsets.UTF_8);
+        for (byte b : bytes) {
+            hash ^= (b & 0xFFL);
+            hash = (hash * 0x01000193L) & 0xFFFFFFFFL;
+        }
+        tokenHash32 = (int) hash;
+    }
+
+    private void hapticTick(View v) {
+        if (v != null) {
+            v.performHapticFeedback(
+                    HapticFeedbackConstants.KEYBOARD_TAP,
+                    HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING);
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -97,6 +129,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         if (savedHost != null && !savedHost.isEmpty()) {
             discoveredWifiHost = savedHost;
         }
+        updateTokenHash();
 
         handlePairingIntent(getIntent());
 
@@ -107,7 +140,13 @@ public class MainActivity extends Activity implements SensorEventListener {
             if (accelSensor == null) {
                 accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
             }
+            gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY);
+            proximitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY);
         }
+
+        try {
+            udpMotionSocket = new DatagramSocket();
+        } catch (Exception ignored) {}
 
         setContentView(buildUI());
         startNetworkWorker();
@@ -150,11 +189,51 @@ public class MainActivity extends Activity implements SensorEventListener {
                 .putString("token", authToken)
                 .putString("host", discoveredWifiHost != null ? discoveredWifiHost : "")
                 .apply();
+        updateTokenHash();
 
         sendCmd(String.format(Locale.US, "{\"t\":\"auth\",\"k\":\"%s\"}", authToken));
         try {
             if (activeSocket != null) activeSocket.close();
         } catch (Exception ignored) {}
+    }
+
+    private void showKeyboardInputDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(18), dp(12), dp(18), dp(8));
+
+        TextView help = new TextView(this);
+        help.setText("Type or use Android Voice Dictation (🎤 on your keyboard) to send text directly to your Linux PC:");
+        help.setTextSize(13f);
+        box.addView(help);
+
+        final EditText input = new EditText(this);
+        input.setHint("Type or dictate text here...");
+        box.addView(input);
+
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("⌨️ Remote Keyboard & Voice Input")
+                .setView(box)
+                .setPositiveButton("Send + Enter ↵", (d, w) -> {
+                    String txt = input.getText().toString().replace("\\", "\\\\").replace("\"", "\\\"");
+                    if (!txt.isEmpty()) {
+                        sendCmd(String.format(Locale.US, "{\"t\":\"text\",\"s\":\"%s\\n\"}", txt));
+                    }
+                })
+                .setNeutralButton("Send Text Only", (d, w) -> {
+                    String txt = input.getText().toString().replace("\\", "\\\\").replace("\"", "\\\"");
+                    if (!txt.isEmpty()) {
+                        sendCmd(String.format(Locale.US, "{\"t\":\"text\",\"s\":\"%s\"}", txt));
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .create();
+        dlg.show();
+        input.requestFocus();
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) {
+            imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0);
+        }
     }
 
     private void showPairingDialog() {
@@ -216,6 +295,23 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         sensorReadout = new TextView(this);
         sensorReadout.setVisibility(View.GONE); // Drawn on canvas to prevent top bar layout flicker
+
+        kbdBtn = new TextView(this);
+        kbdBtn.setText("⌨️");
+        kbdBtn.setTextColor(Color.WHITE);
+        kbdBtn.setBackgroundColor(Color.parseColor("#1E293B"));
+        kbdBtn.setTextSize(11f);
+        kbdBtn.setSingleLine(true);
+        kbdBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        kbdBtn.setPadding(dp(8), dp(7), dp(8), dp(7));
+        LinearLayout.LayoutParams kbdLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        kbdLp.rightMargin = dp(5);
+        kbdBtn.setOnClickListener(v -> {
+            hapticTick(v);
+            showKeyboardInputDialog();
+        });
+        headerLayout.addView(kbdBtn, kbdLp);
 
         pairBtn = new TextView(this);
         pairBtn.setText("🔑 QR");
@@ -330,9 +426,11 @@ public class MainActivity extends Activity implements SensorEventListener {
         airTriggerBtn.setOnTouchListener((v, ev) -> {
             int action = ev.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
+                hapticTick(v);
                 airHold = true;
                 airTriggerBtn.setBackgroundColor(Color.parseColor("#0284C7"));
                 airTriggerBtn.setTextColor(Color.WHITE);
+                sendCmd("{\"t\":\"shortcut\",\"a\":\"laser_ring\"}");
                 touchPadView.invalidate();
                 return true;
             } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
@@ -346,8 +444,24 @@ public class MainActivity extends Activity implements SensorEventListener {
         });
         LinearLayout.LayoutParams airLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        airLp.bottomMargin = dp(8);
+        airLp.bottomMargin = dp(6);
         rootLayout.addView(airTriggerBtn, airLp);
+
+        // Media, Volume, Laser Spotlight & Monitor Selector Row
+        mediaRowLayout = new LinearLayout(this);
+        mediaRowLayout.setOrientation(LinearLayout.HORIZONTAL);
+        mediaRowLayout.addView(createKeyButton("🔇", "vol_mute", true, 0.75f, 0, "#1E293B"));
+        mediaRowLayout.addView(createKeyButton("🔉−", "vol_down", true, 0.85f, dp(4), "#1E293B"));
+        mediaRowLayout.addView(createKeyButton("🔊+", "vol_up", true, 0.85f, dp(4), "#1E293B"));
+        mediaRowLayout.addView(createKeyButton("⏮", "media_prev", true, 0.7f, dp(4), "#1E293B"));
+        mediaRowLayout.addView(createKeyButton("⏯", "media_play", true, 0.85f, dp(4), "#1E293B"));
+        mediaRowLayout.addView(createKeyButton("⏭", "media_next", true, 0.7f, dp(4), "#1E293B"));
+        mediaRowLayout.addView(createKeyButton("🔴", "laser_ring", true, 0.7f, dp(4), "#7F1D1D"));
+        mediaRowLayout.addView(createKeyButton("🖥️", "mon_cycle", true, 0.75f, dp(4), "#334155"));
+        LinearLayout.LayoutParams mediaRowLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        mediaRowLp.bottomMargin = dp(6);
+        rootLayout.addView(mediaRowLayout, mediaRowLp);
 
         // Quick Keys Row (ESC | 🔍− | 100% | 🔍+ | ⇤TAB | TAB⇥ | SPC | ⌫ | ENTER)
         keyRowLayout = new LinearLayout(this);
@@ -391,7 +505,17 @@ public class MainActivity extends Activity implements SensorEventListener {
         btn.setOnTouchListener((v, ev) -> {
             int action = ev.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
+                hapticTick(v);
                 btn.setBackgroundColor(Color.parseColor("#38BDF8"));
+                if ("mon_cycle".equals(code)) {
+                    hudBannerText = "🖥️ SWITCHED TARGET MONITOR REGION";
+                    hudBannerUntil = System.currentTimeMillis() + 800;
+                    if (touchPadView != null) touchPadView.invalidate();
+                } else if ("laser_ring".equals(code)) {
+                    hudBannerText = "🔴 DESKTOP CURSOR SPOTLIGHT";
+                    hudBannerUntil = System.currentTimeMillis() + 800;
+                    if (touchPadView != null) touchPadView.invalidate();
+                }
                 if (isShortcut) {
                     sendCmd(String.format(Locale.US, "{\"t\":\"shortcut\",\"a\":\"%s\"}", code));
                 } else {
@@ -426,6 +550,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         btn.setOnTouchListener((v, ev) -> {
             int action = ev.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
+                hapticTick(v);
                 btn.setBackgroundColor(Color.parseColor("#0284C7"));
                 sendCmd(String.format(Locale.US, "{\"t\":\"btn\",\"b\":\"%s\",\"p\":true}", btnCode));
                 return true;
@@ -455,6 +580,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             tabsRowLayout.setVisibility(View.GONE);
             sensRowLayout.setVisibility(View.GONE);
             airTriggerBtn.setVisibility(View.GONE);
+            mediaRowLayout.setVisibility(View.GONE);
             keyRowLayout.setVisibility(View.GONE);
             btnRowLayout.setVisibility(View.GONE);
         } else {
@@ -466,6 +592,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             tabsRowLayout.setVisibility(View.VISIBLE);
             sensRowLayout.setVisibility(View.VISIBLE);
             airTriggerBtn.setVisibility(currentMode == 0 ? View.VISIBLE : View.GONE);
+            mediaRowLayout.setVisibility(View.VISIBLE);
             keyRowLayout.setVisibility(View.VISIBLE);
             btnRowLayout.setVisibility(View.VISIBLE);
         }
@@ -482,7 +609,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             sendQueue.clear();
             powerBtn.setText("🔒 OFF");
             powerBtn.setBackgroundColor(Color.parseColor("#DC2626"));
-            statusText.setText("● Disconnected (Standby — No Mouse Input)");
+            statusText.setText("● Disconnected (Standby)");
             statusText.setTextColor(Color.parseColor("#94A3B8"));
             if (sensorManager != null) {
                 sensorManager.unregisterListener(this);
@@ -495,7 +622,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         } else {
             powerBtn.setText("⚡ ON");
             powerBtn.setBackgroundColor(Color.parseColor("#16A34A"));
-            statusText.setText("● Reconnecting (Wi-Fi / USB)...");
+            statusText.setText("● Reconnecting...");
             statusText.setTextColor(Color.parseColor("#F59E0B"));
             registerSensorsIfActive();
         }
@@ -512,6 +639,45 @@ public class MainActivity extends Activity implements SensorEventListener {
         if (accelSensor != null) {
             sensorManager.registerListener(this, accelSensor, SensorManager.SENSOR_DELAY_GAME);
         }
+        if (gravitySensor != null) {
+            sensorManager.registerListener(this, gravitySensor, SensorManager.SENSOR_DELAY_NORMAL);
+        }
+        if (proximitySensor != null) {
+            sensorManager.registerListener(this, proximitySensor, SensorManager.SENSOR_DELAY_NORMAL);
+        }
+    }
+
+    private void sendFastUdpMotion(int opcode, int slotOrFlags, float v1, float v2) {
+        if (!powerEnabled || faceDownStandby) return;
+        InetAddress target = activeHostAddr;
+        DatagramSocket ds = udpMotionSocket;
+        if (target == null || ds == null) {
+            // Fallback to TCP if UDP socket/address not ready
+            if (opcode == 1) {
+                sendCmd(String.format(Locale.US, "{\"t\":\"rel\",\"dx\":%.3f,\"dy\":%.3f}", v1, v2));
+            } else if (opcode == 2) {
+                sendCmd(String.format(Locale.US, "{\"t\":\"scroll\",\"dy\":%.3f,\"dx\":%.3f}", v1, v2));
+            }
+            return;
+        }
+        new Thread(() -> {
+            try {
+                ByteBuffer bb = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
+                bb.put((byte) 0x50); // 'P'
+                bb.put((byte) 0x54); // 'T'
+                bb.put((byte) opcode);
+                bb.put((byte) slotOrFlags);
+                int sig = tokenHash32;
+                bb.putInt(sig);
+                int iv1 = Float.floatToRawIntBits(v1) ^ sig;
+                int iv2 = Float.floatToRawIntBits(v2) ^ sig;
+                bb.putInt(iv1);
+                bb.putInt(iv2);
+                byte[] arr = bb.array();
+                DatagramPacket pkt = new DatagramPacket(arr, arr.length, target, UDP_DISCOVERY_PORT);
+                ds.send(pkt);
+            } catch (Exception ignored) {}
+        }).start();
     }
 
     private String discoverDesktopOverUdp() {
@@ -598,6 +764,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                     activeSocket = sock;
                     sock.connect(new InetSocketAddress(host, PORT), 600);
                     sock.setTcpNoDelay(true);
+                    activeHostAddr = InetAddress.getByName(host);
                     connected = true;
                     final String connectedHost = host;
                     final String linkType = "127.0.0.1".equals(host) ? "USB" : "Wi-Fi";
@@ -684,15 +851,45 @@ public class MainActivity extends Activity implements SensorEventListener {
 
     @Override
     public void onSensorChanged(SensorEvent event) {
-        if (event.sensor.getType() == Sensor.TYPE_LINEAR_ACCELERATION ||
-            event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
-            latestAccel[0] = event.values[0];
-            latestAccel[1] = event.values[1];
-            latestAccel[2] = event.values[2];
+        int sType = event.sensor.getType();
+        if (sType == Sensor.TYPE_PROXIMITY) {
+            float maxRange = proximitySensor != null ? proximitySensor.getMaximumRange() : 5.0f;
+            isNearProximity = event.values[0] < Math.min(2.5f, maxRange);
+            boolean newStandby = isFaceDown && isNearProximity;
+            if (newStandby != faceDownStandby) {
+                faceDownStandby = newStandby;
+                if (touchPadView != null) touchPadView.invalidate();
+            }
             return;
         }
 
-        if (event.sensor.getType() == Sensor.TYPE_GYROSCOPE) {
+        if (sType == Sensor.TYPE_GRAVITY) {
+            // Z < -8.0 means phone screen is facing straight down toward desk
+            isFaceDown = event.values[2] < -8.0f;
+            boolean newStandby = isFaceDown;
+            if (newStandby != faceDownStandby) {
+                faceDownStandby = newStandby;
+                if (touchPadView != null) touchPadView.invalidate();
+            }
+            return;
+        }
+
+        if (sType == Sensor.TYPE_LINEAR_ACCELERATION || sType == Sensor.TYPE_ACCELEROMETER) {
+            latestAccel[0] = event.values[0];
+            latestAccel[1] = event.values[1];
+            latestAccel[2] = event.values[2];
+            if (gravitySensor == null && sType == Sensor.TYPE_ACCELEROMETER) {
+                isFaceDown = event.values[2] < -8.2f;
+                if (isFaceDown != faceDownStandby) {
+                    faceDownStandby = isFaceDown;
+                    if (touchPadView != null) touchPadView.invalidate();
+                }
+            }
+            return;
+        }
+
+        if (sType == Sensor.TYPE_GYROSCOPE) {
+            if (faceDownStandby) return;
             // Android Gyroscope in rad/s:
             // values[0] = X-axis (Pitch: tilting phone up/down)
             // values[1] = Y-axis (Roll: flipping/rolling phone wrist left/right)
@@ -708,6 +905,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                     && Math.abs(rollRad) > Math.abs(pitchRad) * 1.5f
                     && Math.abs(rollRad) > Math.abs(yawRad) * 1.5f) {
                 lastFlipTabTime = now;
+                hapticTick(touchPadView);
                 if (rollRad > 0) {
                     sendCmd("{\"t\":\"shortcut\",\"a\":\"tab_next\"}");
                     hudBannerText = "⚡ FLIP RIGHT → NEXT TAB";
@@ -743,7 +941,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             smoothVy = smoothVy * 0.55f + rawVy * 0.45f;
 
             if (Math.abs(smoothVx) > 0.04f || Math.abs(smoothVy) > 0.04f) {
-                sendCmd(String.format(Locale.US, "{\"t\":\"rel\",\"dx\":%.3f,\"dy\":%.3f}", smoothVx, smoothVy));
+                sendFastUdpMotion(1, 0, smoothVx, smoothVy);
             }
         }
     }
@@ -850,6 +1048,18 @@ public class MainActivity extends Activity implements SensorEventListener {
                 return;
             }
 
+            if (faceDownStandby) {
+                rect.set(dp(4), dp(4), w - dp(4), h - dp(4));
+                borderPaint.setColor(Color.parseColor("#F59E0B"));
+                canvas.drawRoundRect(rect, dp(16), dp(16), borderPaint);
+                titlePaint.setColor(Color.parseColor("#F59E0B"));
+                canvas.drawText("🌙 FACE-DOWN / POCKET AUTO-STANDBY", w / 2f, h / 2f - dp(12), titlePaint);
+                titlePaint.setColor(Color.parseColor("#F8FAFC"));
+                canvas.drawText("Input paused automatically while phone is face-down", w / 2f, h / 2f + dp(14), subPaint);
+                canvas.drawText("Pick up phone to resume instant control", w / 2f, h / 2f + dp(34), subPaint);
+                return;
+            }
+
             rect.set(dp(4), dp(4), w - dp(4), h - dp(4));
 
             // Draw dedicated Left-Edge Easy Zoom Strip and Right-Edge Easy Scroll Strip
@@ -945,7 +1155,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                 }
             }
 
-            if (!powerEnabled) {
+            if (!powerEnabled || faceDownStandby) {
                 return true;
             }
 
@@ -1028,6 +1238,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                     float dy = ev.getY(0) - lastZoomY;
                     totalMove += Math.abs(dy);
                     if (Math.abs(dy) > dp(22)) {
+                        hapticTick(this);
                         sendCmd(dy < 0
                                 ? "{\"t\":\"shortcut\",\"a\":\"zoom_in\"}"
                                 : "{\"t\":\"shortcut\",\"a\":\"zoom_out\"}");
@@ -1040,7 +1251,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                     totalMove += Math.abs(dy);
                     float scrollDelta = -dy / dp(18);
                     if (Math.abs(scrollDelta) > 0.01f) {
-                        sendCmd(String.format(Locale.US, "{\"t\":\"scroll\",\"dy\":%.3f,\"dx\":0}", scrollDelta));
+                        sendFastUdpMotion(2, 0, scrollDelta, 0f);
                     }
                 } else if (count == 1 && maxPointers == 1) {
                     float dx = (ev.getX(0) - lastX) * (sensitivity / 9.0f);
@@ -1049,7 +1260,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                     lastX = ev.getX(0);
                     lastY = ev.getY(0);
                     if (Math.abs(dx) > 0.01f || Math.abs(dy) > 0.01f) {
-                        sendCmd(String.format(Locale.US, "{\"t\":\"rel\",\"dx\":%.3f,\"dy\":%.3f}", dx, dy));
+                        sendFastUdpMotion(1, 0, dx, dy);
                     }
                 } else if (count == 2 && maxPointers == 2) {
                     float curX = (ev.getX(0) + ev.getX(1)) * 0.5f;
@@ -1063,6 +1274,7 @@ public class MainActivity extends Activity implements SensorEventListener {
 
                     // Responsive 2-finger pinch-to-zoom vs 2-finger smooth scroll
                     if (Math.abs(distDelta) > dp(14) && Math.abs(distDelta) > (Math.abs(dx) + Math.abs(dy)) * 0.9f) {
+                        hapticTick(this);
                         sendCmd(distDelta > 0
                                 ? "{\"t\":\"shortcut\",\"a\":\"zoom_in\"}"
                                 : "{\"t\":\"shortcut\",\"a\":\"zoom_out\"}");
@@ -1076,8 +1288,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                         lastScrollY = curY;
                         lastPinchDist = curDist;
                         if (Math.abs(vScroll) > 0.01f || Math.abs(hScroll) > 0.01f) {
-                            sendCmd(String.format(Locale.US,
-                                    "{\"t\":\"scroll\",\"dy\":%.3f,\"dx\":%.3f}", vScroll, hScroll));
+                            sendFastUdpMotion(2, 0, vScroll, hScroll);
                         }
                     }
                 } else if (count >= 3 && !threeGestureTriggered) {
@@ -1088,11 +1299,13 @@ public class MainActivity extends Activity implements SensorEventListener {
                     totalMove += Math.abs(dx) + Math.abs(dy);
                     if (Math.abs(dx) > dp(42) && Math.abs(dx) > Math.abs(dy)) {
                         threeGestureTriggered = true;
+                        hapticTick(this);
                         sendCmd(dx > 0
                                 ? "{\"t\":\"shortcut\",\"a\":\"app_next\"}"
                                 : "{\"t\":\"shortcut\",\"a\":\"app_prev\"}");
                     } else if (Math.abs(dy) > dp(42) && Math.abs(dy) > Math.abs(dx)) {
                         threeGestureTriggered = true;
+                        hapticTick(this);
                         sendCmd("{\"t\":\"shortcut\",\"a\":\"overview\"}");
                     }
                 }
@@ -1102,6 +1315,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                 inZoomStrip = false;
                 long dt = System.currentTimeMillis() - downTime;
                 if (dt < 230 && totalMove < dp(12)) {
+                    hapticTick(this);
                     if (maxPointers == 1) {
                         sendCmd("{\"t\":\"click\",\"b\":\"left\"}");
                     } else if (maxPointers == 2) {
