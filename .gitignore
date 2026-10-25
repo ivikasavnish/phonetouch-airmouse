@@ -5,3 +5,4 @@ key.pem
 android/build/
 android/debug.keystore
 phonetouch-daemon
+PhoneTouchBar.app/

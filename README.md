@@ -75,6 +75,34 @@ Or open **`http://127.0.0.1:9997`** in your desktop browser for the visual **Ser
 
 ---
 
+## 🍎 Quick Start (macOS Desktop Server)
+
+The same daemon builds on macOS; `input_macos.rs` replaces `/dev/uinput` with CoreGraphics event injection. The 1:1 touchscreen mode drives the pointer with the first finger only, since macOS has no touch injection API.
+
+```bash
+brew install qrencode                      # QR codes in terminal & dashboard
+rustc -O phonetouch_daemon.rs -o phonetouch-daemon
+
+# Autostart on login (launchd)
+cp com.phonetouch.daemon.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.phonetouch.daemon.plist
+tail -f /tmp/phonetouch.log
+```
+
+Grant **System Settings → Privacy & Security → Accessibility** to `phonetouch-daemon`, otherwise macOS silently drops the injected events. The daemon opens that pane on startup if the permission is missing. Re-grant after rebuilding, because the binary changes. The `on|off|toggle|qr|status|rotate` CLI and the dashboard work the same as on Linux.
+
+### Menu bar control (`macos/`)
+
+`PhoneTouchBar.app` (installed to `/Applications`) is a native menu bar item that shows daemon status. From it you can turn input on or off, show the pairing QR code, copy the URI, rotate the token, and start, restart or stop the daemon. It also warns when Accessibility permission is missing.
+
+```bash
+./macos/build_menubar.sh                   # builds and installs /Applications/PhoneTouchBar.app
+cp macos/com.phonetouch.menubar.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.phonetouch.menubar.plist
+```
+
+---
+
 ## 📱 Building & Installing the Native Android App
 
 Requires Android SDK (`aapt2`, `d8`, `apksigner`, `zipalign`, `adb`) and JDK:
