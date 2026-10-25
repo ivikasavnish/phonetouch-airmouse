@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+cert.pem
+key.pem
+android/build/
+android/debug.keystore
+phonetouch-daemon

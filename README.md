@@ -1,0 +1,78 @@
+# PhoneTouch AirMouse (Rust Linux Daemon + Native Android App)
+
+Turn any Android phone into an ultra-low-latency **3D Gyroscope + Accelerometer Air Mouse**, **5-Finger Multi-Touch Trackpad**, and **1:1 Direct Desktop Touchscreen** for Linux over **Wi-Fi** or **USB**—with **zero external dependencies**.
+
+---
+
+## ✨ Key Features
+
+- **🦀 Zero-Dependency Native Rust Kernel Daemon (`phonetouch-daemon`)**
+  - Directly creates two Linux kernel input devices via `/dev/uinput`:
+    - `PhoneTouch Virtual AirMouse (Rust)` — Relative mouse, high-resolution scroll wheel (`REL_WHEEL_HI_RES`), mouse buttons, and keyboard shortcuts.
+    - `PhoneTouch Virtual Touchscreen (Rust)` — 5-slot Type-B Multi-Touch (`ABS_MT_SLOT` 0–4) 1:1 absolute screen mapping.
+  - Uses `< 600 KB` of RAM and runs automatically on login via `systemd`.
+- **🔑 QR-Authenticated Air Mouse & Server Turn-Off Control**
+  - Built-in desktop control CLI (`phonetouch-daemon on|off|toggle|qr|status|rotate`) and local web dashboard (`http://127.0.0.1:9997`) displaying an SVG **QR Code** (`phonetouch://<IP>:9999/<TOKEN>`) and a one-click **Server Turn-Off / Turn-On** switch.
+  - Scanning the QR code with your phone's camera opens the Android app automatically via deep-link (`phonetouch://`), configures the Wi-Fi host IP, and authenticates the session.
+- **📱 Native Android App (`PhoneTouch.apk`)**
+  - **3 Operating Modes**:
+    1. **Trackpad + Air Trigger**: Multi-touch trackpad + hold button to steer cursor in 3D space using hardware `TYPE_GYROSCOPE` + `TYPE_LINEAR_ACCELERATION`.
+    2. **1:1 Multi-Touch Screen**: Up to 5 simultaneous fingers mapped 1:1 to your desktop monitor.
+    3. **Continuous 3D Air Mouse**: Hands-free air pointer; touch the center pad to clutch/pause.
+  - **Dedicated Edge Strips**:
+    - **Left Edge (`＋ ZOOM －`)**: Slide 1 finger up/down to Zoom In / Out.
+    - **Right Edge (`▲ SCROLL ▼`)**: Slide 1 finger up/down for effortless high-resolution scrolling.
+  - **Multi-Touch & Wrist Gestures**:
+    - **Flip Phone Wrist Left / Right**: Switch browser/editor tabs (`Ctrl+Shift+Tab` / `Ctrl+Tab`).
+    - **2-Finger Pinch / Spread**: Zoom Out / In (`Ctrl+-` / `Ctrl++` + `Ctrl+Wheel`).
+    - **2-Finger Slide**: Smooth vertical & horizontal scrolling.
+    - **3-Finger Swipe Left/Right/Up**: Switch windows (`Alt+Tab`) or open desktop overview (`Super`).
+  - **🥷 OLED Stealth Mode**: Turns the phone screen pure `#000000` black at 1% brightness to save battery. Wake anytime with 1 tap on the top pill or by pressing Volume / Back.
+  - **⚡ Master ON / 🔒 OFF Switch**: Completely disconnects the socket and unregisters hardware Gyro/Accel sensors when not needed so your cursor never moves accidentally.
+
+---
+
+## 🚀 Quick Start (Linux Desktop Server)
+
+### 1. Build the Rust Daemon
+```bash
+rustc -O phonetouch_daemon.rs -o phonetouch-daemon
+```
+
+### 2. Install & Enable Autostart Service (`systemd`)
+```bash
+mkdir -p ~/.config/systemd/user
+cp phonetouch.service ~/.config/systemd/user/phonetouch.service
+systemctl --user daemon-reload
+systemctl --user enable --now phonetouch.service
+```
+
+### 3. Server Control & QR Code Pairing
+```bash
+# Show QR code in terminal for phone pairing
+./phonetouch-daemon qr
+
+# Turn server input OFF / ON from terminal
+./phonetouch-daemon off
+./phonetouch-daemon on
+./phonetouch-daemon toggle
+
+# Check status or rotate QR security token
+./phonetouch-daemon status
+./phonetouch-daemon rotate
+```
+Or open **`http://127.0.0.1:9997`** in your desktop browser for the visual **Server Control & QR Auth Dashboard**.
+
+---
+
+## 📱 Building & Installing the Native Android App
+
+Requires Android SDK (`aapt2`, `d8`, `apksigner`, `zipalign`, `adb`) and JDK:
+```bash
+bash build_and_install_apk.sh
+```
+
+---
+
+## 📄 License
+MIT License

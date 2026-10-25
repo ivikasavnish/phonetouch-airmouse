@@ -1,0 +1,14 @@
+[Unit]
+Description=PhoneTouch USB Touchscreen & Gyro AirMouse Daemon (Rust)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/vikasavn/phonetouch/phonetouch-daemon
+WorkingDirectory=/home/vikasavn/phonetouch
+Restart=always
+RestartSec=2
+Environment=PATH=/home/vikasavn/Android/Sdk/platform-tools:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
