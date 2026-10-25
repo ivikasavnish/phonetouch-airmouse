@@ -129,14 +129,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         toggle.state = s.enabled ? .on : .off
 
         menu.addItem(.separator())
-        if let qr = qrImage(s.uri, size: 180) {
+        if let qr = qrImage(s.uri, size: 220) {
             let qrItem = NSMenuItem()
-            let v = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 200))
-            let iv = NSImageView(frame: NSRect(x: 20, y: 10, width: 180, height: 180))
+            let v = NSView(frame: NSRect(x: 0, y: 0, width: qr.size.width + 40, height: qr.size.height + 20))
+            // Shown at its exact point size so modules stay pixel-aligned (no resampling blur)
+            let iv = NSImageView(frame: NSRect(x: 20, y: 10, width: qr.size.width, height: qr.size.height))
             iv.image = qr
-            iv.wantsLayer = true
-            iv.layer?.backgroundColor = NSColor.white.cgColor
-            iv.layer?.cornerRadius = 8
+            iv.imageScaling = .scaleNone
             v.addSubview(iv)
             qrItem.view = v
             menu.addItem(qrItem)
@@ -172,17 +171,33 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         add("Quit Menu Bar Control", #selector(quit), key: "q")
     }
 
+    // Crisp QR: integer pixels per module, 4-module white quiet zone, low error correction
+    // (fewer, larger modules decode fastest from a screen)
     private func qrImage(_ text: String, size: CGFloat) -> NSImage? {
         guard !text.isEmpty, let f = CIFilter(name: "CIQRCodeGenerator") else { return nil }
         f.setValue(Data(text.utf8), forKey: "inputMessage")
-        f.setValue("M", forKey: "inputCorrectionLevel")
-        guard let out = f.outputImage else { return nil }
-        let scale = floor(size / out.extent.width)
-        let scaled = out.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let rep = NSCIImageRep(ciImage: scaled)
-        let img = NSImage(size: rep.size)
-        img.addRepresentation(rep)
-        return img
+        f.setValue("L", forKey: "inputCorrectionLevel")
+        guard let out = f.outputImage,
+              let modules = CIContext().createCGImage(out, from: out.extent) else { return nil }
+
+        let backing = NSScreen.main?.backingScaleFactor ?? 2
+        let quiet = 4
+        let total = modules.width + 2 * quiet
+        let pxPerModule = max(1, Int(floor(size * backing / CGFloat(total))))
+        let px = total * pxPerModule
+
+        guard let ctx = CGContext(data: nil, width: px, height: px, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceGray(),
+                                  bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+        ctx.setFillColor(gray: 1, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: px, height: px))
+        ctx.interpolationQuality = .none
+        let inset = CGFloat(quiet * pxPerModule)
+        ctx.draw(modules, in: CGRect(x: inset, y: inset,
+                                     width: CGFloat(modules.width * pxPerModule),
+                                     height: CGFloat(modules.height * pxPerModule)))
+        guard let cg = ctx.makeImage() else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: CGFloat(px) / backing, height: CGFloat(px) / backing))
     }
 
     // MARK: Actions
