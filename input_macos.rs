@@ -6,7 +6,6 @@
 // Requires: System Settings → Privacy & Security → Accessibility → allow the daemon binary.
 
 use std::ffi::{c_char, c_void};
-use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -83,11 +82,24 @@ unsafe extern "C" {
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     fn CFRelease(cf: *const c_void);
+    fn CFDictionaryCreate(
+        allocator: *const c_void,
+        keys: *const *const c_void,
+        values: *const *const c_void,
+        count: isize,
+        key_callbacks: *const c_void,
+        value_callbacks: *const c_void,
+    ) -> *const c_void;
+    static kCFBooleanTrue: *const c_void;
+    static kCFTypeDictionaryKeyCallBacks: u8;
+    static kCFTypeDictionaryValueCallBacks: u8;
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
+    static kAXTrustedCheckOptionPrompt: *const c_void;
 }
 
 #[link(name = "AppKit", kind = "framework")]
@@ -105,6 +117,28 @@ unsafe extern "C" {
 // Whether macOS will deliver our synthetic events (Accessibility permission)
 pub fn input_permitted() -> bool {
     unsafe { AXIsProcessTrusted() }
+}
+
+// Ask macOS to show its own Accessibility prompt; this registers the entry for the
+// exact running binary (a manually added entry goes stale whenever the binary is rebuilt)
+fn request_permission() -> bool {
+    unsafe {
+        let keys = [kAXTrustedCheckOptionPrompt];
+        let values = [kCFBooleanTrue];
+        let opts = CFDictionaryCreate(
+            std::ptr::null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            &kCFTypeDictionaryKeyCallBacks as *const u8 as *const c_void,
+            &kCFTypeDictionaryValueCallBacks as *const u8 as *const c_void,
+        );
+        let trusted = AXIsProcessTrustedWithOptions(opts);
+        if !opts.is_null() {
+            CFRelease(opts);
+        }
+        trusted
+    }
 }
 
 const HID_SYSTEM_STATE: i32 = 1;
@@ -176,7 +210,7 @@ unsafe impl Send for VirtualInput {}
 
 impl VirtualInput {
     pub fn new() -> Result<Self, String> {
-        if !input_permitted() {
+        if !request_permission() {
             eprintln!(
                 "[!] Accessibility permission missing: input events will be ignored by macOS.\n    \
                  Grant it in System Settings → Privacy & Security → Accessibility for:\n    {}",
@@ -184,9 +218,6 @@ impl VirtualInput {
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|_| "phonetouch-daemon".into())
             );
-            let _ = Command::new("open")
-                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-                .spawn();
         }
         let source = unsafe { CGEventSourceCreate(HID_SYSTEM_STATE) };
         if source.is_null() {

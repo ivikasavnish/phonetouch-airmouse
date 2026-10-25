@@ -6,3 +6,4 @@ android/build/
 android/debug.keystore
 phonetouch-daemon
 PhoneTouchBar.app/
+bin/

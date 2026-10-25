@@ -81,7 +81,7 @@ The same daemon builds on macOS; `input_macos.rs` replaces `/dev/uinput` with Co
 
 ```bash
 brew install qrencode                      # QR codes in terminal & dashboard
-rustc -O phonetouch_daemon.rs -o phonetouch-daemon
+mkdir -p bin && rustc -O phonetouch_daemon.rs -o bin/phonetouch-daemon
 
 # Autostart on login (launchd)
 cp com.phonetouch.daemon.plist ~/Library/LaunchAgents/
@@ -89,7 +89,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.phonetouch.daemon.pl
 tail -f /tmp/phonetouch.log
 ```
 
-Grant **System Settings → Privacy & Security → Accessibility** to `phonetouch-daemon`, otherwise macOS silently drops the injected events. The daemon opens that pane on startup if the permission is missing. Re-grant after rebuilding, because the binary changes. The `on|off|toggle|qr|status|rotate` CLI and the dashboard work the same as on Linux.
+On first start, macOS asks to let `phonetouch-daemon` control the computer. Allow it, otherwise macOS silently drops the injected events. Each rebuild changes the binary, so macOS asks again; turn the new entry on (remove a stale one first). The `on|off|toggle|qr|status|rotate` CLI and the dashboard work the same as on Linux.
 
 ### Menu bar control (`macos/`)
 

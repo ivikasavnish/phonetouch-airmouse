@@ -6,7 +6,7 @@
     <string>com.phonetouch.daemon</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/vikasavnish/phonetouch/phonetouch-daemon</string>
+        <string>/Users/vikasavnish/phonetouch/bin/phonetouch-daemon</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/vikasavnish/phonetouch</string>
