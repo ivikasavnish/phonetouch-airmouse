@@ -27,17 +27,20 @@ Turn any Android phone into an ultra-low-latency **3D Gyroscope + Accelerometer 
     - Dedicated quick-bar for Mute (`🔇`), Volume Down/Up (`🔉−` / `🔊+`), Previous/Play-Pause/Next Track (`⏮`, `⏯`, `⏭`).
     - **🔴 Laser Spotlight**: Triggers desktop cursor locator ring (`KEY_LEFTCTRL` pulse) on demand or automatically when engaging Air Mouse.
     - **🖥️ Multi-Monitor Selector**: Cycle 1:1 Touchscreen mapping between **Full Desktop (`0–100%`)**, **Left/Primary Monitor (`0–50%`)**, and **Right/Secondary Monitor (`50–100%`)**.
+  - **🌐 Page Grab**: Tap `🌐` to open the desktop's current browser tab on the phone. macOS reads the URL from Chrome/Arc/Brave/Edge/Vivaldi/Safari via AppleScript (~150 ms; first use asks for Automation permission); Firefox and Linux fall back to copying the address bar (`Ctrl/Cmd+L`, `Ctrl/Cmd+C`) and restore your clipboard afterwards (Linux needs `wl-clipboard` or `xclip`).
   - **📳 Tactile Haptic Feedback**: Subtle hardware haptic ticks on buttons, scroll/zoom notches, and wrist flip-tab gestures.
   - **🛌 Face-Down / Pocket Auto-Standby**: Uses `TYPE_GRAVITY` (`z < -7.8 m/s²`) and `TYPE_PROXIMITY` to automatically pause cursor and touch input whenever the phone is placed face-down on a desk or in a pocket, and resumes on pickup.
   - **Dedicated Edge Strips**:
     - **Left Edge (`＋ ZOOM －`)**: Slide 1 finger up/down to Zoom In / Out.
     - **Right Edge (`▲ SCROLL ▼`)**: Slide 1 finger up/down for effortless high-resolution scrolling.
   - **Multi-Touch & Wrist Gestures**:
-    - **Flip Phone Wrist Left / Right**: Switch browser/editor tabs (`Ctrl+Shift+Tab` / `Ctrl+Tab`).
+    - **Quick Horizontal Wrist Tilt Left / Right**: Switch desktop windows (`Alt+Shift+Tab` / `Alt+Tab` on Linux; `Command+Shift+Tab` / `Command+Tab` on macOS).
     - **2-Finger Pinch / Spread**: Zoom Out / In (`Ctrl+-` / `Ctrl++` + `Ctrl+Wheel`).
     - **2-Finger Slide**: Smooth vertical & horizontal scrolling.
     - **3-Finger Swipe Left/Right/Up**: Switch windows (`Alt+Tab`) or open desktop overview (`Super`).
   - **🥷 OLED Stealth Mode**: Turns the phone screen pure `#000000` black at 1% brightness to save battery. Wake anytime with 1 tap on the top pill or by pressing Volume / Back.
+  - **▣ Android Minimal Mode**: Tap `MINI` to keep PhoneTouch active in Android's system Picture-in-Picture window while using other apps. The native PiP route needs no draw-over-apps or accessibility permission and leaves the foreground app's touch gestures alone.
+  - **↔ Window Tilt**: A quick horizontal wrist tilt switches desktop windows (`Alt+Tab` on Linux, `Command+Tab` on macOS). The gesture rearms only after the phone settles, preventing repeated switches during ordinary movement.
   - **⚡ Master ON / 🔒 OFF Switch**: Completely disconnects the socket and unregisters hardware Gyro/Accel sensors when not needed so your cursor never moves accidentally.
 
 ---

@@ -2,8 +2,10 @@ package com.phonetouch.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.PictureInPictureParams;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -17,9 +19,11 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
+import android.util.Rational;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
@@ -32,6 +36,8 @@ import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -58,6 +64,8 @@ public class MainActivity extends Activity implements SensorEventListener {
     // Power / Disconnect switch, QR Auth Token, Face-Down Standby & OLED Stealth Mode
     private volatile boolean powerEnabled = true;
     private volatile boolean stealthMode = false;
+    private volatile boolean minimalMode = false;
+    private volatile boolean enteringMinimalMode = false;
     private volatile boolean faceDownStandby = false;
     private volatile Socket activeSocket = null;
     private volatile DatagramSocket udpMotionSocket = null;
@@ -94,6 +102,7 @@ public class MainActivity extends Activity implements SensorEventListener {
     private TextView kbdBtn;
     private TextView pairBtn;
     private TextView stealthBtn;
+    private TextView minimalBtn;
     private TextView powerBtn;
     private TextView airTriggerBtn;
     private TextView[] tabButtons = new TextView[3];
@@ -149,6 +158,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         } catch (Exception ignored) {}
 
         setContentView(buildUI());
+        updatePictureInPictureParams();
         startNetworkWorker();
     }
 
@@ -313,6 +323,29 @@ public class MainActivity extends Activity implements SensorEventListener {
         });
         headerLayout.addView(kbdBtn, kbdLp);
 
+        // Page Grab: open the desktop's current browser tab on this phone
+        TextView grabBtn = new TextView(this);
+        grabBtn.setText("🌐");
+        grabBtn.setTextColor(Color.WHITE);
+        grabBtn.setBackgroundColor(Color.parseColor("#1E293B"));
+        grabBtn.setTextSize(11f);
+        grabBtn.setSingleLine(true);
+        grabBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        grabBtn.setPadding(dp(8), dp(7), dp(8), dp(7));
+        LinearLayout.LayoutParams grabLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        grabLp.rightMargin = dp(5);
+        grabBtn.setOnClickListener(v -> {
+            hapticTick(v);
+            if (!connected) {
+                showHudBanner("🌐 NOT CONNECTED TO PC");
+                return;
+            }
+            showHudBanner("🌐 GRABBING DESKTOP PAGE...");
+            sendCmd("{\"t\":\"grab\"}");
+        });
+        headerLayout.addView(grabBtn, grabLp);
+
         pairBtn = new TextView(this);
         pairBtn.setText("🔑 QR");
         pairBtn.setTextColor(Color.parseColor("#38BDF8"));
@@ -326,6 +359,23 @@ public class MainActivity extends Activity implements SensorEventListener {
         pairLp.rightMargin = dp(6);
         pairBtn.setOnClickListener(v -> showPairingDialog());
         headerLayout.addView(pairBtn, pairLp);
+
+        minimalBtn = new TextView(this);
+        minimalBtn.setText("▣ MINI");
+        minimalBtn.setTextColor(Color.parseColor("#BAE6FD"));
+        minimalBtn.setBackgroundColor(Color.parseColor("#075985"));
+        minimalBtn.setTextSize(11f);
+        minimalBtn.setSingleLine(true);
+        minimalBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        minimalBtn.setPadding(dp(8), dp(7), dp(8), dp(7));
+        LinearLayout.LayoutParams miniLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        miniLp.rightMargin = dp(6);
+        minimalBtn.setOnClickListener(v -> {
+            hapticTick(v);
+            enterMinimalMode();
+        });
+        headerLayout.addView(minimalBtn, miniLp);
 
         stealthBtn = new TextView(this);
         stealthBtn.setText("🥷 STEALTH");
@@ -601,6 +651,51 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
     }
 
+    private void updatePictureInPictureParams() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder()
+                .setAspectRatio(new Rational(9, 16));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setSeamlessResizeEnabled(false);
+        }
+        setPictureInPictureParams(builder.build());
+    }
+
+    /**
+     * Uses Android's system Picture-in-Picture window instead of an accessibility service or
+     * draw-over-other-apps overlay. This keeps PhoneTouch visible (and therefore eligible for
+     * sensor delivery) while another app has focus, without stealing that app's gestures.
+     */
+    private void enterMinimalMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Minimal mode unavailable")
+                    .setMessage("Android 8.0 or newer is required for the non-conflicting mini window.")
+                    .setPositiveButton("OK", null)
+                    .show();
+            return;
+        }
+        setStealthMode(false);
+        updatePictureInPictureParams();
+        enteringMinimalMode = enterPictureInPictureMode(new PictureInPictureParams.Builder()
+                .setAspectRatio(new Rational(9, 16))
+                .build());
+    }
+
+    private void applyMinimalUi(boolean enable) {
+        minimalMode = enable;
+        headerLayout.setVisibility(enable ? View.GONE : View.VISIBLE);
+        tabsRowLayout.setVisibility(enable ? View.GONE : View.VISIBLE);
+        sensRowLayout.setVisibility(enable ? View.GONE : View.VISIBLE);
+        airTriggerBtn.setVisibility(enable ? View.GONE : (currentMode == 0 ? View.VISIBLE : View.GONE));
+        mediaRowLayout.setVisibility(enable ? View.GONE : View.VISIBLE);
+        keyRowLayout.setVisibility(enable ? View.GONE : View.VISIBLE);
+        btnRowLayout.setVisibility(enable ? View.GONE : View.VISIBLE);
+        rootLayout.setPadding(enable ? dp(4) : dp(12), enable ? dp(4) : dp(10),
+                enable ? dp(4) : dp(12), enable ? dp(4) : dp(12));
+        if (touchPadView != null) touchPadView.invalidate();
+    }
+
     private void togglePower() {
         powerEnabled = !powerEnabled;
         if (!powerEnabled) {
@@ -735,6 +830,65 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
     }
 
+    private void showHudBanner(String text) {
+        hudBannerText = text;
+        hudBannerUntil = System.currentTimeMillis() + 1200;
+        if (touchPadView != null) touchPadView.invalidate();
+    }
+
+    // Reads daemon -> phone lines on the control socket: {"t":"open","u":"..."} / {"t":"grab_fail"}
+    private void startReplyReader(Socket sock) {
+        Thread reader = new Thread(() -> {
+            try {
+                BufferedReader in = new BufferedReader(
+                        new InputStreamReader(sock.getInputStream(), StandardCharsets.UTF_8));
+                String line;
+                while ((line = in.readLine()) != null) {
+                    if (line.contains("\"t\":\"open\"")) {
+                        String url = extractJsonString(line, "u");
+                        if (url != null) uiHandler.post(() -> openGrabbedUrl(url));
+                    } else if (line.contains("\"t\":\"grab_fail\"")) {
+                        uiHandler.post(() -> showHudBanner("🌐 NO BROWSER PAGE FOUND ON PC"));
+                    }
+                }
+            } catch (Exception ignored) {
+                // Socket closed; the network worker reconnects and starts a new reader
+            }
+        });
+        reader.setDaemon(true);
+        reader.start();
+    }
+
+    private static String extractJsonString(String line, String key) {
+        String pat = "\"" + key + "\":\"";
+        int start = line.indexOf(pat);
+        if (start < 0) return null;
+        StringBuilder sb = new StringBuilder();
+        for (int i = start + pat.length(); i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '\\' && i + 1 < line.length()) {
+                sb.append(line.charAt(++i));
+            } else if (c == '"') {
+                return sb.toString();
+            } else {
+                sb.append(c);
+            }
+        }
+        return null;
+    }
+
+    private void openGrabbedUrl(String url) {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return;
+        try {
+            Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            view.addCategory(Intent.CATEGORY_BROWSABLE);
+            view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(view);
+        } catch (Exception e) {
+            showHudBanner("🌐 NO APP TO OPEN PAGE");
+        }
+    }
+
     private void startNetworkWorker() {
         Thread worker = new Thread(() -> {
             // Prioritizes Wi-Fi (192.168.1.7 + Auto-Discovered LAN IP + Tailscale) and also supports USB
@@ -782,6 +936,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                     String authHandshake = String.format(Locale.US, "{\"t\":\"auth\",\"k\":\"%s\"}\n", authToken);
                     out.write(authHandshake.getBytes(StandardCharsets.UTF_8));
                     out.flush();
+                    startReplyReader(sock);
                     while (running && powerEnabled && !sock.isClosed()) {
                         String msg = sendQueue.take();
                         if (!powerEnabled) break;
@@ -818,7 +973,28 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override
     protected void onPause() {
         super.onPause();
-        if (sensorManager != null) {
+        // PiP is the explicit minimal/background mode. Keep sensors registered while its
+        // system-owned window remains visible; otherwise release them immediately.
+        if (!enteringMinimalMode && !isInPictureInPictureMode() && sensorManager != null) {
+            sensorManager.unregisterListener(this);
+        }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean inPictureInPictureMode,
+                                              Configuration newConfig) {
+        super.onPictureInPictureModeChanged(inPictureInPictureMode, newConfig);
+        enteringMinimalMode = false;
+        applyMinimalUi(inPictureInPictureMode);
+        if (inPictureInPictureMode) {
+            registerSensorsIfActive();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (!isInPictureInPictureMode() && sensorManager != null) {
             sensorManager.unregisterListener(this);
         }
     }
@@ -826,10 +1002,17 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override
     protected void onDestroy() {
         running = false;
+        if (sensorManager != null) sensorManager.unregisterListener(this);
+        try {
+            if (activeSocket != null) activeSocket.close();
+            if (udpMotionSocket != null) udpMotionSocket.close();
+        } catch (Exception ignored) {}
         super.onDestroy();
     }
 
-    private long lastFlipTabTime = 0;
+    private long lastWindowTiltTime = 0;
+    private long rollNeutralSince = 0;
+    private boolean windowTiltArmed = true;
     private volatile String hudBannerText = "";
     private volatile long hudBannerUntil = 0;
 
@@ -904,18 +1087,27 @@ public class MainActivity extends Activity implements SensorEventListener {
 
             long now = System.currentTimeMillis();
 
-            // Flip phone left/right (quick wrist roll) to switch tabs when not dragging on pad
-            if (!touchClutch && (now - lastFlipTabTime > 480) && Math.abs(rollRad) > 4.2f
+            // A deliberate horizontal wrist tilt switches desktop windows. It must settle near
+            // neutral before it can fire again, preventing normal air-mouse motion from repeating.
+            if (Math.abs(rollRad) < 0.55f) {
+                if (rollNeutralSince == 0) rollNeutralSince = now;
+                if (now - rollNeutralSince > 180) windowTiltArmed = true;
+            } else {
+                rollNeutralSince = 0;
+            }
+            if (!touchClutch && windowTiltArmed && (now - lastWindowTiltTime > 650)
+                    && Math.abs(rollRad) > 3.6f
                     && Math.abs(rollRad) > Math.abs(pitchRad) * 1.5f
                     && Math.abs(rollRad) > Math.abs(yawRad) * 1.5f) {
-                lastFlipTabTime = now;
+                lastWindowTiltTime = now;
+                windowTiltArmed = false;
                 hapticTick(touchPadView);
                 if (rollRad > 0) {
-                    sendCmd("{\"t\":\"shortcut\",\"a\":\"tab_next\"}");
-                    hudBannerText = "⚡ FLIP RIGHT → NEXT TAB";
+                    sendCmd("{\"t\":\"shortcut\",\"a\":\"app_next\"}");
+                    hudBannerText = "⚡ TILT RIGHT → NEXT WINDOW";
                 } else {
-                    sendCmd("{\"t\":\"shortcut\",\"a\":\"tab_prev\"}");
-                    hudBannerText = "⚡ FLIP LEFT → PREV TAB";
+                    sendCmd("{\"t\":\"shortcut\",\"a\":\"app_prev\"}");
+                    hudBannerText = "⚡ TILT LEFT → PREV WINDOW";
                 }
                 hudBannerUntil = now + 700;
                 if (touchPadView != null) touchPadView.invalidate();
@@ -1040,6 +1232,25 @@ public class MainActivity extends Activity implements SensorEventListener {
                 return;
             }
 
+            if (minimalMode) {
+                canvas.drawColor(Color.parseColor("#07111F"));
+                rect.set(dp(4), dp(4), w - dp(4), h - dp(4));
+                borderPaint.setColor(connected ? Color.parseColor("#22C55E") : Color.parseColor("#F59E0B"));
+                canvas.drawRoundRect(rect, dp(16), dp(16), borderPaint);
+                titlePaint.setTextSize(dp(15));
+                titlePaint.setColor(Color.parseColor("#F8FAFC"));
+                canvas.drawText(connected ? "PhoneTouch active" : "Finding desktop…",
+                        w / 2f, h / 2f - dp(24), titlePaint);
+                subPaint.setTextSize(dp(11));
+                canvas.drawText("← quick tilt   switch windows   quick tilt →",
+                        w / 2f, h / 2f + dp(2), subPaint);
+                canvas.drawText("Tap the mini window to expand or close",
+                        w / 2f, h / 2f + dp(24), subPaint);
+                titlePaint.setTextSize(dp(17));
+                subPaint.setTextSize(dp(12));
+                return;
+            }
+
             if (!powerEnabled) {
                 rect.set(dp(4), dp(4), w - dp(4), h - dp(4));
                 borderPaint.setColor(Color.parseColor("#7F1D1D"));
@@ -1109,15 +1320,15 @@ public class MainActivity extends Activity implements SensorEventListener {
                 title = "Multi-Touch + Zoom + Scroll";
                 sub1 = "Left Bar: 1-Finger Zoom • Right Bar: 1-Finger Scroll";
                 sub2 = "2-Finger Pinch: Zoom In/Out • 2-Finger Slide: Scroll";
-                sub3 = "3-Finger Swipe: Apps/Overview • Flip Phone: Switch Tab";
+                sub3 = "3-Finger Swipe: Apps/Overview • Quick Tilt: Switch Windows";
             } else if (currentMode == 1) {
                 title = "1:1 Multi-Touch Desktop Screen";
                 sub1 = "Up to 5 simultaneous fingers mapped 1:1";
                 sub2 = "to your Linux desktop monitor";
-                sub3 = "Flip phone wrist Left/Right to switch Tabs";
+                sub3 = "Quick horizontal tilt Left/Right to switch Windows";
             } else {
                 title = "Continuous 3D Air Mouse Active";
-                sub1 = "Point & tilt phone in air • Flip wrist L/R: Switch Tab";
+                sub1 = "Point phone in air • Quick tilt L/R: Switch Windows";
                 sub2 = "Left Bar: Easy Zoom • Right Bar: Easy Scroll";
                 sub3 = "Touch center pad to clutch/pause Air cursor";
             }

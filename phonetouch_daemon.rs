@@ -122,6 +122,112 @@ fn process_line(vinput: &Arc<Mutex<VirtualInput>>, line: &str) {
     }
 }
 
+// Page Grab: {"t":"grab"} from the phone -> URL of the desktop's current browser tab,
+// answered on the same TCP stream as {"t":"open","u":"<url>"} (or {"t":"grab_fail"}).
+fn run_capture(cmd: &str, args: &[&str]) -> Option<String> {
+    let out = Command::new(cmd).args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+fn looks_like_url(s: &str) -> bool {
+    (s.starts_with("http://") || s.starts_with("https://")) && !s.contains(char::is_whitespace)
+}
+
+#[cfg(target_os = "macos")]
+const SCRIPTABLE_BROWSERS: [&str; 7] = [
+    "Google Chrome", "Arc", "Brave Browser", "Microsoft Edge", "Vivaldi", "Chromium", "Safari",
+];
+
+#[cfg(target_os = "macos")]
+fn browser_url_applescript(app: &str) -> Option<String> {
+    let script = if app == "Safari" {
+        "tell application \"Safari\" to get URL of front document".to_string()
+    } else {
+        format!("tell application \"{app}\" to get URL of active tab of front window")
+    };
+    run_capture("osascript", &["-e", &script])
+}
+
+#[cfg(target_os = "macos")]
+fn grab_active_url(vinput: &Arc<Mutex<VirtualInput>>) -> Option<String> {
+    // `lsappinfo` reads the frontmost app without needing System Events automation rights
+    let front = run_capture("lsappinfo", &["front"])
+        .and_then(|asn| run_capture("lsappinfo", &["info", "-only", "name", &asn]))
+        .and_then(|s| s.rsplit('=').next().map(|n| n.trim_matches('"').to_string()))
+        .unwrap_or_default();
+
+    if SCRIPTABLE_BROWSERS.contains(&front.as_str()) {
+        return browser_url_applescript(&front).filter(|u| looks_like_url(u));
+    }
+    if front == "Firefox" || front == "Zen" || front == "Opera" {
+        let saved = run_capture("pbpaste", &[]);
+        if let Ok(mut dev) = vinput.lock() {
+            dev.shortcut("copy_url");
+        }
+        thread::sleep(Duration::from_millis(60));
+        let url = run_capture("pbpaste", &[]).filter(|u| looks_like_url(u));
+        if let Some(prev) = saved {
+            if let Ok(mut child) = Command::new("pbcopy").stdin(std::process::Stdio::piped()).spawn() {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(prev.as_bytes());
+                }
+                let _ = child.wait();
+            }
+        }
+        return url;
+    }
+    // Desktop focus is elsewhere (terminal, editor...): use the first running scriptable browser
+    for app in SCRIPTABLE_BROWSERS {
+        if run_capture("pgrep", &["-x", app]).is_some() {
+            if let Some(u) = browser_url_applescript(app).filter(|u| looks_like_url(u)) {
+                return Some(u);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn grab_active_url(vinput: &Arc<Mutex<VirtualInput>>) -> Option<String> {
+    // No scripting bridge on Linux browsers: copy the focused address bar and read the clipboard
+    let wayland = env::var_os("WAYLAND_DISPLAY").is_some();
+    let read_clip = || {
+        if wayland {
+            run_capture("wl-paste", &["--no-newline"])
+        } else {
+            run_capture("xclip", &["-selection", "clipboard", "-o"])
+        }
+    };
+    let saved = read_clip();
+    if let Ok(mut dev) = vinput.lock() {
+        dev.shortcut("copy_url");
+    }
+    thread::sleep(Duration::from_millis(80));
+    let url = read_clip().filter(|u| looks_like_url(u));
+    if let Some(prev) = saved {
+        let (cmd, args): (&str, &[&str]) = if wayland {
+            ("wl-copy", &[])
+        } else {
+            ("xclip", &["-selection", "clipboard"])
+        };
+        if let Ok(mut child) = Command::new(cmd).args(args).stdin(std::process::Stdio::piped()).spawn() {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(prev.as_bytes());
+            }
+            // wl-copy/xclip keep serving the selection in the background; don't wait on them
+        }
+    }
+    url
+}
+
+fn json_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 struct DaemonState {
     enabled: AtomicBool,
     token: Mutex<String>,
@@ -217,6 +323,8 @@ fn handle_client(
         *p = peer_addr.clone();
     }
 
+    // Write half for replies to the phone (Page Grab); the read loop owns the original stream
+    let writer = stream.try_clone().ok().map(|s| Arc::new(Mutex::new(s)));
     let reader = BufReader::new(stream);
     for line in reader.lines() {
         let Ok(l) = line else { break };
@@ -254,6 +362,26 @@ fn handle_client(
 
         // Server-side Master Turn-Off Switch check
         if !state.enabled.load(Ordering::Relaxed) {
+            continue;
+        }
+
+        if let Some("grab") = extract_str(&l, "t") {
+            // Off the read loop so cursor/touch packets keep flowing during the lookup
+            if let Some(w) = writer.clone() {
+                let vclone = Arc::clone(&vinput);
+                thread::spawn(move || {
+                    let reply = match grab_active_url(&vclone) {
+                        Some(u) => {
+                            println!("[+] Page grab -> {u}");
+                            format!("{{\"t\":\"open\",\"u\":\"{}\"}}\n", json_escape(&u))
+                        }
+                        None => "{\"t\":\"grab_fail\"}\n".to_string(),
+                    };
+                    if let Ok(mut s) = w.lock() {
+                        let _ = s.write_all(reply.as_bytes());
+                    }
+                });
+            }
             continue;
         }
 

@@ -482,6 +482,20 @@ impl VirtualInput {
                 Self::emit(&mut self.mouse_file, EV_KEY, KEY_LEFTCTRL, 0);
                 Self::emit(&mut self.mouse_file, EV_SYN, SYN_REPORT, 0);
             }
+            "copy_url" => {
+                // Ctrl + L, Ctrl + C, Esc: copy the focused browser's address bar to the clipboard
+                for code in [KEY_L, KEY_C] {
+                    Self::emit(&mut self.mouse_file, EV_KEY, KEY_LEFTCTRL, 1);
+                    Self::emit(&mut self.mouse_file, EV_KEY, code, 1);
+                    Self::emit(&mut self.mouse_file, EV_SYN, SYN_REPORT, 0);
+                    thread::sleep(Duration::from_millis(12));
+                    Self::emit(&mut self.mouse_file, EV_KEY, code, 0);
+                    Self::emit(&mut self.mouse_file, EV_KEY, KEY_LEFTCTRL, 0);
+                    Self::emit(&mut self.mouse_file, EV_SYN, SYN_REPORT, 0);
+                    thread::sleep(Duration::from_millis(40));
+                }
+                self.tap_key(KEY_ESC, false);
+            }
             "vol_up" => self.tap_key(KEY_VOLUMEUP, false),
             "vol_down" => self.tap_key(KEY_VOLUMEDOWN, false),
             "vol_mute" => self.tap_key(KEY_MUTE, false),

@@ -183,6 +183,8 @@ const VK_EQUAL: u16 = 24;
 const VK_MINUS: u16 = 27;
 const VK_0: u16 = 29;
 const VK_UP: u16 = 126;
+const VK_L: u16 = 37;
+const VK_C: u16 = 8;
 
 // NX_KEYTYPE_* media keys (IOKit/hidsystem/ev_keymap.h)
 const NX_SOUND_UP: i64 = 0;
@@ -448,6 +450,14 @@ impl VirtualInput {
             "zoom_in" => self.chord(&[(VK_COMMAND, FLAG_COMMAND)], VK_EQUAL, 12),
             "zoom_out" => self.chord(&[(VK_COMMAND, FLAG_COMMAND)], VK_MINUS, 12),
             "zoom_reset" => self.chord(&[(VK_COMMAND, FLAG_COMMAND)], VK_0, 12),
+            // Cmd + L, Cmd + C, Esc: copy the focused browser's address bar to the clipboard
+            "copy_url" => {
+                self.chord(&[(VK_COMMAND, FLAG_COMMAND)], VK_L, 12);
+                thread::sleep(Duration::from_millis(40));
+                self.chord(&[(VK_COMMAND, FLAG_COMMAND)], VK_C, 12);
+                thread::sleep(Duration::from_millis(40));
+                self.chord(&[], VK_ESCAPE, 8);
+            }
             "vol_up" => self.media_key(NX_SOUND_UP),
             "vol_down" => self.media_key(NX_SOUND_DOWN),
             "vol_mute" => self.media_key(NX_MUTE),
