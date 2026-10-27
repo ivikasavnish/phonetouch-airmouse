@@ -113,6 +113,19 @@ Requires Android SDK (`aapt2`, `d8`, `apksigner`, `zipalign`, `adb`) and JDK:
 bash build_and_install_apk.sh
 ```
 
+### 🛡️ Dev Guard (auto developer mode)
+
+Some apps (banking, payments, games) refuse to run while Developer options are on. Dev Guard turns **Developer options + USB debugging OFF** 3 seconds after you unplug from the computer, and turns both **back ON** as soon as you plug into a computer again, so `adb` works right away. A wall charger doesn't count as a computer and won't turn them on.
+
+- Needs a one-time grant over USB (the build script does this for you):
+  ```bash
+  adb shell pm grant com.phonetouch.app android.permission.WRITE_SECURE_SETTINGS
+  ```
+- Runs as a quiet foreground service ("Dev Guard" notification) and restarts after a reboot or app update. Tap **Stop guard** in the notification to turn it off; open the app to turn it back on.
+- **Quick Settings tile "Dev Mode"**: add it from the edit-tiles panel to flip both settings with one tap.
+- **Replug notification**: with a USB-C-to-C cable or a hub, the phone sometimes comes up as the USB *host* and never connects to the computer, so dev mode can't turn on. Dev Guard detects this and shows *"Replug the USB cable"*; unplugging and plugging back in fixes it.
+- On Samsung, set PhoneTouch's battery usage to *Unrestricted* so One UI doesn't kill the guard.
+
 ---
 
 ## 📄 License

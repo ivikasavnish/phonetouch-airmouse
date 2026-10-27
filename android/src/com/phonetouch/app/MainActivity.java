@@ -160,6 +160,13 @@ public class MainActivity extends Activity implements SensorEventListener {
         setContentView(buildUI());
         updatePictureInPictureParams();
         startNetworkWorker();
+
+        if (Build.VERSION.SDK_INT >= 33 && DevGuardService.hasPermission(this)
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {android.Manifest.permission.POST_NOTIFICATIONS}, 1);
+        }
+        if (DevGuardService.hasPermission(this)) DevGuardService.setGuardEnabled(this, true);
     }
 
     @Override
