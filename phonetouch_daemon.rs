@@ -224,6 +224,40 @@ fn grab_active_url(vinput: &Arc<Mutex<VirtualInput>>) -> Option<String> {
     url
 }
 
+// localhost on the desktop means nothing on the phone: point loopback hosts at the
+// desktop's Wi-Fi address instead (http://localhost:3000/x -> http://192.168.1.7:3000/x)
+fn rewrite_loopback_url(url: &str, lan_ip: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else { return url.to_string() };
+    let auth_end = rest.find(|c| c == '/' || c == '?' || c == '#').unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(auth_end);
+    let (userinfo, hostport) = match authority.rfind('@') {
+        Some(i) => authority.split_at(i + 1),
+        None => ("", authority),
+    };
+    let (host, port) = if hostport.starts_with('[') {
+        match hostport.find(']') {
+            Some(i) => hostport.split_at(i + 1),
+            None => return url.to_string(),
+        }
+    } else {
+        match hostport.rfind(':') {
+            Some(i) => hostport.split_at(i),
+            None => (hostport, ""),
+        }
+    };
+    let h = host.to_ascii_lowercase();
+    let loopback = h == "localhost"
+        || h.ends_with(".localhost")
+        || h.starts_with("127.")
+        || h == "0.0.0.0"
+        || h == "[::1]"
+        || h == "[::]";
+    if !loopback {
+        return url.to_string();
+    }
+    format!("{scheme}://{userinfo}{lan_ip}{port}{path}")
+}
+
 fn json_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -309,6 +343,12 @@ fn handle_client(
     state: Arc<DaemonState>,
 ) {
     let _ = stream.set_nodelay(true);
+    // The address the phone dialed is one it can reach; over USB (adb reverse) that's
+    // loopback, so fall back to the Wi-Fi address.
+    let lan_ip = match stream.local_addr() {
+        Ok(a) if !a.ip().is_loopback() => a.ip().to_string(),
+        _ => get_primary_lan_ip(),
+    };
     let peer_addr = stream
         .peer_addr()
         .map(|a| a.to_string())
@@ -369,8 +409,9 @@ fn handle_client(
             // Off the read loop so cursor/touch packets keep flowing during the lookup
             if let Some(w) = writer.clone() {
                 let vclone = Arc::clone(&vinput);
+                let lan_ip = lan_ip.clone();
                 thread::spawn(move || {
-                    let reply = match grab_active_url(&vclone) {
+                    let reply = match grab_active_url(&vclone).map(|u| rewrite_loopback_url(&u, &lan_ip)) {
                         Some(u) => {
                             println!("[+] Page grab -> {u}");
                             format!("{{\"t\":\"open\",\"u\":\"{}\"}}\n", json_escape(&u))
